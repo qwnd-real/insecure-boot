@@ -1,0 +1,24 @@
+[workspace]
+members = ["crates/ib-loader"]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[workspace.dependencies]
+uefi = { version = "0.40.0", default-features = false, features = ["panic_handler"] }
+
+[workspace.lints.rust]
+warnings = "deny"
+missing_docs = "deny"
+
+# `pedantic` is a group, so it needs a lower priority than the individual lints
+# below to keep Cargo from rejecting the table on a future overlap.
+[workspace.lints.clippy]
+pedantic = { level = "deny", priority = -1 }
+undocumented_unsafe_blocks = "deny"
+missing_safety_doc = "deny"
+allow_attributes_without_reason = "deny"

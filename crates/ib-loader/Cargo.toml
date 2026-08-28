@@ -1,0 +1,23 @@
+[package]
+name = "ib-loader"
+description = "UEFI application entry point for insecure-boot."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# A `no_std` UEFI image brings its own `#[panic_handler]`, which collides with
+# the `panic_impl` that libtest pulls in from `std`. Both the test and the bench
+# target of a binary are compiled against libtest, so both are disabled to keep
+# `--all-targets` builds working.
+[[bin]]
+name = "ib-loader"
+path = "src/main.rs"
+test = false
+bench = false
+
+[dependencies]
+uefi.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,6 @@
+/target
+
+# Scratch state produced when booting the image locally: the staged EFI system
+# partition tree and the writable copy of the OVMF variable store.
+/esp
+/vars.fd
