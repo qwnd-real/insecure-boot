@@ -17,8 +17,12 @@ test = false
 bench = false
 
 [dependencies]
+ib-tcg2.workspace = true
+ib-tcglog.workspace = true
 ib-tpm-crb.workspace = true
+ib-tpm2.workspace = true
 ib-uacpi.workspace = true
+thiserror.workspace = true
 uefi.workspace = true
 
 [lints]
