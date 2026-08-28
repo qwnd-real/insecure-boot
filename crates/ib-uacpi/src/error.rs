@@ -62,6 +62,8 @@ impl fmt::Debug for Error {
     }
 }
 
+impl core::error::Error for Error {}
+
 /// Turns a uACPI status code into a [`Result`].
 pub(crate) fn check(status: uacpi_status) -> Result<()> {
     if status == UACPI_STATUS_OK {
