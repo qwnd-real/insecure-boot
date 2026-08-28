@@ -4,43 +4,62 @@ Guidance for working in the `insecure-boot` repository.
 
 ## Project
 
-A UEFI application in Rust, built against the [`uefi`](https://docs.rs/uefi)
-crate (rust-osdev). Today it writes a greeting to the firmware console; it is
-the seed of a loader.
+A UEFI application in Rust that brings ACPI up through
+[uACPI](https://github.com/uACPI/uACPI) and drives a TPM 2.0 Command Response
+Buffer interface. It is the seed of a loader; everything runs before
+`ExitBootServices`, which is what lets the layers below assume a flat
+identity-mapped address space, a live console, and boot-service delays.
 
 ```
 Cargo.toml               workspace root: members, shared deps, lint policy
 rust-toolchain.toml      pinned channel, components, and UEFI target
 rustfmt.toml             pinned formatting style edition
 .cargo/config.toml       default build target (x86_64-unknown-uefi)
+third-party/uacpi/       uACPI submodule, pinned to a release tag
+crates/uacpi-sys/        uACPI compiled for the UEFI ABI, plus raw bindings
+crates/ib-uacpi/         the uacpi_kernel_* host primitives and safe wrappers
+crates/ib-tpm-crb/       TPM 2.0 driver for the CRB interface
 crates/ib-loader/        the UEFI application; produces ib-loader.efi
 ```
 
-Crates are prefixed `ib-`. The build target is `x86_64-unknown-uefi` by
-default, so plain `cargo build` produces
-`target/x86_64-unknown-uefi/debug/ib-loader.efi`.
+Crates are prefixed `ib-`, except `-sys` crates, which keep the upstream
+library's name. The build target is `x86_64-unknown-uefi` by default, so plain
+`cargo build` produces `target/x86_64-unknown-uefi/debug/ib-loader.efi`.
+
+Building needs `clang` and `llvm-ar` for the uACPI sources, because `cc` has no
+built-in toolchain mapping for the UEFI targets and a host compiler emits objects
+the UEFI linker cannot read, plus `libclang` for `bindgen`.
 
 ## Commands
 
 ```sh
+git submodule update --init  # required once; uacpi-sys will not build without it
 cargo build                  # zero warnings required
 cargo clippy --all-targets   # zero warnings required
 cargo fmt --all -- --check   # no diff required
 ```
 
 Booting the image in QEMU with OVMF, which mirrors the firmware console to
-serial:
+serial, and with a software TPM behind a CRB interface:
 
 ```sh
-mkdir -p esp/EFI/BOOT
+mkdir -p esp/EFI/BOOT tpmstate
 cp target/x86_64-unknown-uefi/debug/ib-loader.efi esp/EFI/BOOT/BOOTX64.EFI
 cp /usr/share/edk2/x64/OVMF_VARS.4m.fd vars.fd
-qemu-system-x86_64 -machine q35 -m 256 \
+swtpm socket --tpm2 --tpmstate dir=tpmstate --ctrl type=unixio,path=swtpm.sock \
+  --flags not-need-init,startup-clear --daemon
+qemu-system-x86_64 -machine q35 -m 512 \
   -drive if=pflash,format=raw,readonly=on,file=/usr/share/edk2/x64/OVMF_CODE.4m.fd \
   -drive if=pflash,format=raw,file=vars.fd \
   -drive format=raw,file=fat:rw:esp \
+  -chardev socket,id=chrtpm,path=swtpm.sock \
+  -tpmdev emulator,id=tpm0,chardev=chrtpm \
+  -device tpm-crb,tpmdev=tpm0 \
   -display none -serial stdio -net none
 ```
+
+Dropping the last three device options boots a machine with no TPM, which is the
+other path worth checking.
 
 ## 4. Coding style — hard rules
 
@@ -161,9 +180,10 @@ inconvenient is prohibited.
   `loader: print firmware revision at boot`. Lowercase, imperative mood
   ("add", not "added" or "adds"), no trailing period, whole subject line
   ≤ 72 characters.
-- **Areas:** `loader` (ib-loader), `workspace` (root manifests, toolchain,
-  lint/format/config files), `docs` (documentation-only changes). A new crate
-  introduces its own area named after the crate minus the `ib-` prefix.
+- **Areas:** `loader` (ib-loader), `uacpi` (ib-uacpi), `uacpi-sys`, `tpm-crb`
+  (ib-tpm-crb), `workspace` (root manifests, toolchain, lint/format/config
+  files, third-party submodules), `docs` (documentation-only changes). A new
+  crate introduces its own area named after the crate minus the `ib-` prefix.
 - **Body:** separated from the subject by one blank line, prose wrapped at
   72 columns. Explain *what* changed and *why* — motivation and non-obvious
   consequences — not a replay of the diff. Trivial self-explanatory changes
