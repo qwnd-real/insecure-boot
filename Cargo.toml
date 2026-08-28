@@ -3,6 +3,7 @@ members = [
     "crates/ib-loader",
     "crates/ib-tcglog",
     "crates/ib-tpm-crb",
+    "crates/ib-tpm2",
     "crates/ib-uacpi",
     "crates/uacpi-sys",
 ]
@@ -26,6 +27,7 @@ thiserror = { version = "2.0.20", default-features = false }
 
 ib-tcglog = { path = "crates/ib-tcglog" }
 ib-tpm-crb = { path = "crates/ib-tpm-crb" }
+ib-tpm2 = { path = "crates/ib-tpm2" }
 ib-uacpi = { path = "crates/ib-uacpi" }
 uacpi-sys = { path = "crates/uacpi-sys" }
 

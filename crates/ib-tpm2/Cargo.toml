@@ -1,0 +1,18 @@
+[package]
+name = "ib-tpm2"
+description = "TPM 2.0 command and reply marshalling."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+test = false
+bench = false
+
+[dependencies]
+ib-tcglog.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true
