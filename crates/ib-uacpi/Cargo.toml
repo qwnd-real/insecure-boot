@@ -1,0 +1,19 @@
+[package]
+name = "ib-uacpi"
+description = "uACPI host primitives implemented on UEFI boot services."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+test = false
+bench = false
+
+[dependencies]
+uacpi-sys.workspace = true
+uefi.workspace = true
+x86_64.workspace = true
+
+[lints]
+workspace = true
