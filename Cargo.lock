@@ -111,6 +111,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "ib-tcglog"
+version = "0.1.0"
+dependencies = [
+ "bitflags",
+ "thiserror",
+]
+
+[[package]]
 name = "ib-tpm-crb"
 version = "0.1.0"
 dependencies = [

@@ -1,5 +1,11 @@
 [workspace]
-members = ["crates/ib-loader", "crates/ib-tpm-crb", "crates/ib-uacpi", "crates/uacpi-sys"]
+members = [
+    "crates/ib-loader",
+    "crates/ib-tcglog",
+    "crates/ib-tpm-crb",
+    "crates/ib-uacpi",
+    "crates/uacpi-sys",
+]
 resolver = "3"
 
 [workspace.package]
@@ -18,6 +24,7 @@ x86_64 = { version = "0.15.5", default-features = false, features = ["instructio
 bitflags = { version = "2.13.1", default-features = false }
 thiserror = { version = "2.0.20", default-features = false }
 
+ib-tcglog = { path = "crates/ib-tcglog" }
 ib-tpm-crb = { path = "crates/ib-tpm-crb" }
 ib-uacpi = { path = "crates/ib-uacpi" }
 uacpi-sys = { path = "crates/uacpi-sys" }

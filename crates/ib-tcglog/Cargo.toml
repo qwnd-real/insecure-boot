@@ -1,0 +1,18 @@
+[package]
+name = "ib-tcglog"
+description = "On-disk format for replaying a TCG event log into PCR0-7."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+test = false
+bench = false
+
+[dependencies]
+bitflags.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true
