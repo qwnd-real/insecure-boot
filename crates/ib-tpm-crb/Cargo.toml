@@ -1,0 +1,19 @@
+[package]
+name = "ib-tpm-crb"
+description = "TPM 2.0 driver for the TCG Command Response Buffer interface."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+test = false
+bench = false
+
+[dependencies]
+bitflags.workspace = true
+ib-uacpi.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true
