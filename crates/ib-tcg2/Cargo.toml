@@ -1,0 +1,26 @@
+[package]
+name = "ib-tcg2"
+description = "EFI_TCG2_PROTOCOL implemented on a TPM 2.0 device."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+test = false
+bench = false
+
+[dependencies]
+ib-tcglog.workspace = true
+ib-tpm-crb.workspace = true
+ib-tpm2.workspace = true
+
+digest.workspace = true
+sha1.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+uefi.workspace = true
+uefi-raw.workspace = true
+
+[lints]
+workspace = true
