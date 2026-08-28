@@ -51,6 +51,14 @@ const FREESTANDING_FLAGS: &[&str] = &[
 /// using the Microsoft x64 calling convention.
 const CLANG_TARGET: &str = "x86_64-unknown-windows-gnu";
 
+/// C compiler used for the uACPI sources.
+///
+/// Clang can target the UEFI ABI out of the box; a host `cc` cannot.
+const COMPILER: &str = "clang";
+
+/// Archiver used for the resulting objects, which are COFF rather than ELF.
+const ARCHIVER: &str = "llvm-ar";
+
 /// uACPI typedefs whose C spelling is `unsigned long` and whose generated alias
 /// must therefore be replaced.
 ///
@@ -92,12 +100,23 @@ fn uacpi_dir() -> PathBuf {
 }
 
 /// Builds the uACPI sources into a static archive for the current target.
+///
+/// The toolchain has to be named explicitly: `cc` has no built-in mapping for the
+/// UEFI targets, so left alone it would reach for the host compiler and emit ELF
+/// objects that the UEFI linker, which is `lld` in `link.exe` mode, cannot read.
 fn compile(uacpi: &Path, include: &Path) {
     let mut build = cc::Build::new();
     build
+        .compiler(COMPILER)
+        .archiver(ARCHIVER)
+        .flag(format!("--target={CLANG_TARGET}"))
         .include(include)
         .define(REDUCED_HARDWARE, None)
         .files(SOURCES.iter().map(|src| uacpi.join("source").join(src)))
+        // DWARF section names do not fit COFF's eight-character limit, which makes
+        // the linker fall back to a non-standard string table and say so. Debug
+        // info for vendored C is not worth a warning on every link.
+        .debug(false)
         .warnings(false);
 
     for flag in FREESTANDING_FLAGS {
