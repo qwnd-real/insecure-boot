@@ -17,6 +17,8 @@ test = false
 bench = false
 
 [dependencies]
+ib-tpm-crb.workspace = true
+ib-uacpi.workspace = true
 uefi.workspace = true
 
 [lints]
