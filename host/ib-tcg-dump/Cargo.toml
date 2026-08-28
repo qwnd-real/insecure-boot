@@ -1,0 +1,22 @@
+[package]
+name = "ib-tcg-dump"
+description = "Writes a tcglog.ib replay dump from the platform's TCG event log."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+ib-tcglog.workspace = true
+
+clap.workspace = true
+digest.workspace = true
+sha1.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys.workspace = true
+
+[lints]
+workspace = true

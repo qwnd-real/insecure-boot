@@ -1,0 +1,34 @@
+[workspace]
+members = ["ib-tcg-dump"]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[workspace.dependencies]
+ib-tcglog = { path = "../crates/ib-tcglog" }
+
+clap = { version = "4.5.51", features = ["derive"] }
+digest = { version = "0.10.7", default-features = false }
+sha1 = { version = "0.10.6", default-features = false }
+sha2 = { version = "0.10.9", default-features = false }
+thiserror = "2.0.20"
+windows-sys = { version = "0.61.2", features = [
+    "Win32_Foundation",
+    "Win32_System_TpmBaseServices",
+] }
+
+[workspace.lints.rust]
+warnings = "deny"
+missing_docs = "deny"
+
+# `pedantic` is a group, so it needs a lower priority than the individual lints
+# below to keep Cargo from rejecting the table on a future overlap.
+[workspace.lints.clippy]
+pedantic = { level = "deny", priority = -1 }
+undocumented_unsafe_blocks = "deny"
+missing_safety_doc = "deny"
+allow_attributes_without_reason = "deny"

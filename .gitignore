@@ -4,3 +4,6 @@
 # partition tree and the writable copy of the OVMF variable store.
 /esp
 /vars.fd
+
+# Build output of the host-side tools, which are a separate workspace.
+/host/target
