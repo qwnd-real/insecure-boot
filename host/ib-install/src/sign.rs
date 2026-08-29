@@ -356,7 +356,14 @@ fn digest(image: &[u8], headers: &Headers) -> Result<[u8; 32]> {
 
     let checksum = headers.optional + CHECKSUM_AT;
     hasher.update(bytes(image, 0, checksum)?);
-    hasher.update(bytes(image, checksum + size_of::<u32>(), headers.end)?);
+
+    // The certificate table's directory entry is left out with the checksum:
+    // the patch writes into it after the digest is taken, and every verifier
+    // leaves it out of theirs for the same reason.
+    let mut at = checksum + size_of::<u32>();
+    hasher.update(bytes(image, at, headers.certificate - at)?);
+    at = headers.certificate + DIRECTORY_LEN;
+    hasher.update(bytes(image, at, headers.end - at)?);
 
     let mut covered = headers.end;
     for (offset, len) in &headers.sections {
@@ -400,6 +407,10 @@ fn signed_data(digest: &[u8; 32], mok: &Mok) -> Result<Vec<u8>> {
     // The signature is over the attributes as a SET OF, with the outer tag
     // rewritten to the context-specific one the SignerInfo carries them
     // under; the bytes signed and the bytes embedded are the same ones.
+    //
+    // The messageDigest attribute carries the digest of the content — the
+    // SpcIndirectData the certificate table names — not the digest of the
+    // image, which is what that content carries.
     let mut attributes = SetOfVec::new();
     attributes.insert(Attribute {
         attr_type: CONTENT_TYPE,
@@ -408,13 +419,18 @@ fn signed_data(digest: &[u8; 32], mok: &Mok) -> Result<Vec<u8>> {
     attributes.insert(Attribute {
         attr_type: MESSAGE_DIGEST,
         attr_values: one(Any::from_der(
-            &OctetString::new(digest.to_vec())?.to_der()?,
+            &OctetString::new(Sha256::digest(&indirect).to_vec())?.to_der()?,
         )?)?,
     })?;
 
-    let signed_attrs = retagged(&attributes.to_der()?, CONTEXT_ZERO);
-    let signature = mok.signing_key().try_sign(&signed_attrs)?;
+    // The signature is over the attributes as a DER SET OF — the universal
+    // tag, which is what every verifier re-encodes them with to check it.
+    // The SignerInfo carries them under the context-specific [0] instead, so
+    // the same bytes go in with that first byte rewritten.
+    let attrs = attributes.to_der()?;
+    let signature = mok.signing_key().try_sign(&attrs)?;
     let signature: Box<[u8]> = signature.into();
+    let signed_attrs = retagged(&attrs, CONTEXT_ZERO);
 
     let mut signer_infos = SetOfVec::new();
     signer_infos.insert(SignerInfo {
