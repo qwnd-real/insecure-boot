@@ -1,0 +1,23 @@
+[package]
+name = "ib-install"
+description = "Signs the loader and stages a one-shot Windows boot for it."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+ib-tcglog.workspace = true
+
+clap.workspace = true
+der.workspace = true
+rand.workspace = true
+rsa.workspace = true
+thiserror.workspace = true
+x509-cert.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys.workspace = true
+
+[lints]
+workspace = true
