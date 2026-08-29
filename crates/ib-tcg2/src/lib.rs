@@ -1,9 +1,12 @@
 //! `EFI_TCG2_PROTOCOL` for a TPM 2.0 device behind a Command Response Buffer.
 //!
-//! Firmware that predates TPM 2.0 publishes `EFI_TCG_PROTOCOL`, which only ever
-//! speaks SHA-1 and cannot describe a crypto-agile log. [`Tcg2::install`] takes
-//! that interface away and puts this one in its place, so that whatever runs next
-//! finds one provider and finds the newer one.
+//! Firmware publishes TCG protocols of its own: `EFI_TCG_PROTOCOL`, which only
+//! ever speaks SHA-1 and cannot describe a crypto-agile log, and — on firmware
+//! that supports TPM 2.0 — an `EFI_TCG2_PROTOCOL` over the log the firmware
+//! kept. [`Tcg2::install`] takes both kinds away and puts this one in their
+//! place, so that whatever runs next finds one provider, finds the newer one,
+//! and finds the log this protocol built rather than a firmware log that holds
+//! nothing of this boot.
 //!
 //! What the protocol hands out is a real event log, not a summary. It starts as
 //! the log a [`Dump`] was taken from, reproduced record for record, and grows as
@@ -35,8 +38,9 @@ use ib_tcglog::{Algorithm, Dump};
 use ib_tpm_crb::Tpm;
 use thiserror::Error as Fail;
 use uefi::boot::{self, OpenProtocolAttributes, OpenProtocolParams, SearchType};
+use uefi::proto::Protocol;
 use uefi::proto::tcg::{v1, v2};
-use uefi::{Handle, Identify};
+use uefi::{Guid, Handle, Identify};
 
 /// Room the event log keeps for records measured after it was built.
 ///
@@ -105,26 +109,43 @@ pub enum Error {
 pub struct Tcg2 {
     handle: Handle,
     instance: NonNull<Instance>,
-    found: usize,
+    displacement: Displacement,
     removed: Vec<Displaced>,
 }
 
-/// A TCG 1.2 interface that was taken away, and where to put it back.
+/// What installing the protocol found and took away.
+#[derive(Clone, Copy)]
+#[must_use]
+pub struct Displacement {
+    /// `EFI_TCG_PROTOCOL` interfaces the firmware had installed.
+    pub v1_found: usize,
+    /// How many of those went away.
+    pub v1_removed: usize,
+    /// `EFI_TCG2_PROTOCOL` interfaces the firmware had installed, besides the
+    /// one installed here.
+    pub v2_found: usize,
+    /// How many of those went away.
+    pub v2_removed: usize,
+}
+
+/// A TCG interface that was taken away, and where to put it back.
 struct Displaced {
     handle: Handle,
+    guid: &'static Guid,
     interface: *const c_void,
 }
 
 impl Tcg2 {
-    /// Installs the protocol on a handle of its own, and takes away every TCG 1.2
-    /// interface the firmware had installed.
+    /// Installs the protocol on a handle of its own, and takes away every TCG
+    /// interface the firmware had installed — the 1.2 one, and any `EFI_TCG2_PROTOCOL`
+    /// besides this one.
     ///
     /// `tpm` becomes the protocol's, and comes back from [`Tcg2::uninstall`]. When
     /// `dump` is given, the event log starts out as the log that dump was taken
     /// from; otherwise it starts as a single specification identifier event
     /// describing the banks the TPM has allocated.
     ///
-    /// Removing a TCG 1.2 interface is not allowed to stop the newer one from
+    /// Removing a firmware interface is not allowed to stop the newer one from
     /// going in, so one that firmware refuses to part with is left where it is and
     /// counted; [`Tcg2::displaced`] reports what happened.
     ///
@@ -144,12 +165,12 @@ impl Tcg2 {
             boot::install_protocol_interface(None, &v2::Tcg::GUID, Instance::interface(instance))
         }?;
 
-        let (found, removed) = displace();
+        let (displacement, removed) = displace(handle);
 
         Ok(Self {
             handle,
             instance,
-            found,
+            displacement,
             removed,
         })
     }
@@ -169,13 +190,12 @@ impl Tcg2 {
         self.handle
     }
 
-    /// How many TCG 1.2 interfaces were found, and how many of them went away.
-    #[must_use]
-    pub fn displaced(&self) -> (usize, usize) {
-        (self.found, self.removed.len())
+    /// What installing the protocol found, and what it took away.
+    pub const fn displaced(&self) -> Displacement {
+        self.displacement
     }
 
-    /// Withdraws the protocol, puts back the TCG 1.2 interfaces that were taken
+    /// Withdraws the protocol, puts back the TCG interfaces that were taken
     /// away, and hands the TPM back.
     ///
     /// # Errors
@@ -195,11 +215,12 @@ impl Tcg2 {
 
         for displaced in &self.removed {
             // SAFETY: the interface is the one firmware had installed on that same
-            // handle, and it was only ever taken away, never freed.
+            // handle under that same GUID, and it was only ever taken away, never
+            // freed.
             unsafe {
                 boot::install_protocol_interface(
                     Some(displaced.handle),
-                    &v1::Tcg::GUID,
+                    displaced.guid,
                     displaced.interface,
                 )
             }?;
@@ -213,43 +234,72 @@ impl Tcg2 {
     }
 }
 
-/// Takes away every TCG 1.2 interface the firmware installed, and reports how many
-/// there were and which ones went.
-fn displace() -> (usize, Vec<Displaced>) {
-    let Ok(handles) = boot::locate_handle_buffer(SearchType::ByProtocol(&v1::Tcg::GUID)) else {
-        return (0, Vec::new());
+/// Takes away every TCG interface the firmware installed that is not the one just
+/// installed on `ours`, and reports how many there were and which ones went.
+fn displace(ours: Handle) -> (Displacement, Vec<Displaced>) {
+    let (v1_found, v1_removed, v1) = take::<v1::Tcg>(&v1::Tcg::GUID, None);
+    let (v2_found, v2_removed, v2) = take::<v2::Tcg>(&v2::Tcg::GUID, Some(ours));
+
+    let mut removed = v1;
+    removed.extend(v2);
+
+    (
+        Displacement {
+            v1_found,
+            v1_removed,
+            v2_found,
+            v2_removed,
+        },
+        removed,
+    )
+}
+
+/// Takes away every interface of kind `P` the firmware installed — skipping
+/// `keep`, the one installed here — and reports how many were found and how many
+/// went.
+fn take<P: Protocol>(guid: &'static Guid, keep: Option<Handle>) -> (usize, usize, Vec<Displaced>) {
+    let Ok(handles) = boot::locate_handle_buffer(SearchType::ByProtocol(guid)) else {
+        return (0, 0, Vec::new());
     };
 
+    let handles = handles
+        .iter()
+        .copied()
+        .filter(|handle| Some(*handle) != keep)
+        .collect::<Vec<_>>();
+    let found = handles.len();
+
     let mut removed = Vec::new();
-    for handle in handles.iter() {
-        let Some(interface) = interface(*handle) else {
+    for handle in handles {
+        let Some(interface) = interface::<P>(handle) else {
             continue;
         };
 
-        // SAFETY: the interface is the one firmware installed on this handle. A
-        // consumer still holding it would be left with a dangling protocol, which
-        // is the point of displacing it, and is why `uninstall` puts it back.
-        let removal =
-            unsafe { boot::uninstall_protocol_interface(*handle, &v1::Tcg::GUID, interface) };
+        // SAFETY: the interface is the one firmware installed on this handle under
+        // this GUID. A consumer still holding it would be left with a dangling
+        // protocol, which is the point of displacing it, and is why `uninstall`
+        // puts it back.
+        let removal = unsafe { boot::uninstall_protocol_interface(handle, guid, interface) };
 
         if removal.is_ok() {
             removed.push(Displaced {
-                handle: *handle,
+                handle,
+                guid,
                 interface,
             });
         }
     }
 
-    (handles.len(), removed)
+    (found, removed.len(), removed)
 }
 
-/// The address a TCG 1.2 protocol was installed with on `handle`.
-fn interface(handle: Handle) -> Option<*const c_void> {
+/// The address a protocol of kind `P` was installed with on `handle`.
+fn interface<P: Protocol>(handle: Handle) -> Option<*const c_void> {
     // SAFETY: the protocol is opened only to learn the address it lives at, and the
     // scoped handle closes again at the end of this function without the interface
     // itself ever being called.
     let protocol = unsafe {
-        boot::open_protocol::<v1::Tcg>(
+        boot::open_protocol::<P>(
             OpenProtocolParams {
                 handle,
                 agent: boot::image_handle(),

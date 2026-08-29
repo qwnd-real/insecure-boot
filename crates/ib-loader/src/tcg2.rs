@@ -1,8 +1,9 @@
 //! Installing the `EFI_TCG2_PROTOCOL`, and proving that it answers.
 //!
 //! The protocol is exercised through the firmware's own protocol database rather
-//! than through the instance directly, so what gets tested is what a consumer
-//! would reach: the interface is located by GUID and called through its table.
+//! than through the instance directly: it is opened on the handle it was
+//! installed on, and the search a consumer makes by GUID is checked to find that
+//! handle, so what gets tested is what a consumer would reach.
 
 use ib_tcg2::Tcg2;
 use ib_tcglog::Dump;
@@ -36,12 +37,15 @@ pub fn install(tpm: Tpm, dump: Option<&Dump<'_>>) -> Result<Tcg2> {
 
     let instance = tcg2.instance();
     let capability = instance.capability();
-    let (found, removed) = tcg2.displaced();
+    let displaced = tcg2.displaced();
     let (log, log_len, log_spare) = instance.log();
     let (table, events, table_spare) = instance.final_events();
 
     println!("insecure-boot: EFI_TCG2_PROTOCOL installed");
-    println!("  displaced:      {removed} of {found} EFI_TCG_PROTOCOL interfaces");
+    println!(
+        "  displaced:      {} of {} EFI_TCG_PROTOCOL, {} of {} EFI_TCG2_PROTOCOL",
+        displaced.v1_removed, displaced.v1_found, displaced.v2_removed, displaced.v2_found
+    );
     println!(
         "  revision:       {}.{}",
         capability.protocol_version.major, capability.protocol_version.minor
@@ -73,8 +77,17 @@ pub fn install(tpm: Tpm, dump: Option<&Dump<'_>>) -> Result<Tcg2> {
 /// answer refuses to.
 pub fn exercise(tcg2: &Tcg2) -> Result<()> {
     {
-        let handle = boot::get_handle_for_protocol::<Tcg>()?;
-        let mut tcg = boot::open_protocol_exclusive::<Tcg>(handle)?;
+        // A consumer reaches the protocol by searching for its GUID, and what
+        // that search must find is this one: a firmware interface left in place
+        // would hand the consumer the firmware's log instead of this one's.
+        let found = boot::get_handle_for_protocol::<Tcg>()?;
+        if found != tcg2.handle() {
+            println!(
+                "insecure-boot: a search by GUID still finds an interface this could not take away"
+            );
+        }
+
+        let mut tcg = boot::open_protocol_exclusive::<Tcg>(tcg2.handle())?;
 
         let capability = tcg.get_capability()?;
         println!("insecure-boot: the installed protocol answers a consumer");
