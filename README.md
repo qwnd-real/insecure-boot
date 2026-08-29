@@ -50,6 +50,12 @@ genuine boot chain into those empty banks and publish an event log that
 matches. insecure-boot does exactly that, and Windows boots into an
 attestation state indistinguishable from the real thing.
 
+The hardware root of trust is not disturbed either: Intel Boot Guard and
+AMD Platform Secure Boot verify the firmware, and the firmware is never
+touched — everything insecure-boot does happens from the disk, after both
+have already run and passed. The detour is fully compliant with them; they
+anchor a layer this attack never needs to leave.
+
 ## Why the Red Hat shim
 
 The attack needs `GetVariable(SecureBoot)` to return `TRUE` — attestation
