@@ -1,26 +1,21 @@
 //! Replaying a `tcglog.ib` dump into the platform's PCR0 through PCR7.
 //!
-//! The dump is looked for in the root directory of every file system the
-//! firmware knows about, and the first one that yields it wins. Its events are
-//! extended in log order, which is the only order that reproduces the values the
-//! platform it was taken from ended up with, and the PCRs are then read back and
-//! compared against the values the dump records.
+//! The dump is read from the root of the boot volume by the caller. Its events
+//! are extended in log order, which is the only order that reproduces the values
+//! the platform it was taken from ended up with, and the PCRs are then read back
+//! and compared against the values the dump records.
 //!
 //! A replay lands on those values only when nothing has extended the PCRs yet.
 //! Firmware that measures its own boot gets there first on real hardware, so the
 //! comparison is reported rather than enforced.
 
-use alloc::vec;
 use alloc::vec::Vec;
 use core::fmt;
 
 use ib_tcglog::{Algorithm, Bank, Dump, PCR_COUNT};
 use ib_tpm_crb::Tpm;
 use ib_tpm2::{Digest, pcr};
-use uefi::boot::{self, SearchType};
-use uefi::proto::media::file::{File, FileAttribute, FileInfo, FileMode, RegularFile};
-use uefi::proto::media::fs::SimpleFileSystem;
-use uefi::{CStr16, Identify, println};
+use uefi::println;
 
 use crate::error::{Error, Result};
 
@@ -29,31 +24,6 @@ use crate::error::{Error, Result};
 /// Every TPM 2.0 platform profile requires a SHA-256 bank, and it is the one a
 /// crypto-agile log is certain to carry digests for.
 const BANK: Algorithm = Algorithm::SHA256;
-
-/// Length of a buffer holding the dump's name as UCS-2, including the terminator
-/// the firmware expects.
-const NAME_CAPACITY: usize = ib_tcglog::FILE_NAME.len() + 1;
-
-/// Reads the first dump found in the root directory of any file system the
-/// firmware knows about.
-#[must_use]
-pub fn find() -> Option<Vec<u8>> {
-    let mut buffer = [0_u16; NAME_CAPACITY];
-    let name = CStr16::from_str_with_buf(ib_tcglog::FILE_NAME, &mut buffer).ok()?;
-
-    let handles =
-        boot::locate_handle_buffer(SearchType::ByProtocol(&SimpleFileSystem::GUID)).ok()?;
-
-    handles.iter().find_map(|handle| {
-        let mut file_system = boot::open_protocol_exclusive::<SimpleFileSystem>(*handle).ok()?;
-        let mut root = file_system.open_volume().ok()?;
-        let file = root
-            .open(name, FileMode::Read, FileAttribute::empty())
-            .ok()?;
-
-        contents(file.into_regular_file()?)
-    })
-}
 
 /// Replays `dump` into the TPM, and reports how far the result agrees with what
 /// the dump says the platform measured.
@@ -176,15 +146,6 @@ fn value(tpm: &mut Tpm, index: u32, algorithm: Algorithm) -> Result<Vec<u8>> {
     let len = tpm.transmit(&command[..len], &mut reply)?;
 
     Ok(pcr::value(reply.get(..len).unwrap_or_default())?.to_vec())
-}
-
-/// Reads a whole file into memory.
-fn contents(mut file: RegularFile) -> Option<Vec<u8>> {
-    let info = file.get_boxed_info::<FileInfo>().ok()?;
-    let len = usize::try_from(info.file_size()).ok()?;
-
-    let mut bytes = vec![0_u8; len];
-    (file.read(&mut bytes).ok()? == len).then_some(bytes)
 }
 
 /// Prints a digest the way it is usually quoted.
