@@ -2,15 +2,13 @@
 //!
 //! The dump is read from the root of the boot volume by the caller. Its events
 //! are extended in log order, which is the only order that reproduces the values
-//! the platform it was taken from ended up with, and the PCRs are then read back
-//! and compared against the values the dump records.
+//! the platform it was taken from ended up with.
 //!
 //! A replay lands on those values only when nothing has extended the PCRs yet.
 //! Firmware that measures its own boot gets there first on real hardware, so the
-//! comparison is reported rather than enforced.
+//! state the PCRs start in is reported rather than corrected.
 
 use alloc::vec::Vec;
-use core::fmt;
 
 use ib_tcglog::{Algorithm, Bank, Dump, PCR_COUNT};
 use ib_tpm_crb::Tpm;
@@ -19,14 +17,13 @@ use uefi::println;
 
 use crate::error::{Error, Result};
 
-/// Bank the replay extends and checks.
+/// Bank the replay extends.
 ///
 /// Every TPM 2.0 platform profile requires a SHA-256 bank, and it is the one a
 /// crypto-agile log is certain to carry digests for.
 const BANK: Algorithm = Algorithm::SHA256;
 
-/// Replays `dump` into the TPM, and reports how far the result agrees with what
-/// the dump says the platform measured.
+/// Replays `dump` into the TPM, extending every event it records in log order.
 ///
 /// # Errors
 ///
@@ -56,7 +53,7 @@ pub fn run(tpm: &mut Tpm, dump: &Dump<'_>) -> Result<()> {
         dump.event_count()
     );
 
-    compare(tpm, &bank)
+    Ok(())
 }
 
 /// Reports whether anything has extended the PCRs yet, since only a TPM whose
@@ -111,31 +108,6 @@ fn extend(tpm: &mut Tpm, dump: &Dump<'_>, bank: &Bank<'_>) -> Result<u32> {
     Ok(extended)
 }
 
-/// Reads PCR0 through PCR7 back and reports which of them the replay landed on.
-fn compare(tpm: &mut Tpm, bank: &Bank<'_>) -> Result<()> {
-    let mut matched = 0;
-
-    for index in 0..PCR_COUNT {
-        let held = value(tpm, index, bank.algorithm())?;
-        let recorded = bank.expected(index);
-
-        if recorded == Some(held.as_slice()) {
-            matched += 1;
-            continue;
-        }
-
-        println!("  PCR{index} holds    {}", Hex(&held));
-        match recorded {
-            Some(recorded) => println!("       the dump {}", Hex(recorded)),
-            None => println!("       the dump records no value for it"),
-        }
-    }
-
-    println!("  {matched} of {PCR_COUNT} PCRs hold the value the dump records");
-
-    Ok(())
-}
-
 /// Reads the value PCR `index` currently holds in the `algorithm` bank.
 fn value(tpm: &mut Tpm, index: u32, algorithm: Algorithm) -> Result<Vec<u8>> {
     let mut command = [0_u8; pcr::READ_CAPACITY];
@@ -146,13 +118,4 @@ fn value(tpm: &mut Tpm, index: u32, algorithm: Algorithm) -> Result<Vec<u8>> {
     let len = tpm.transmit(&command[..len], &mut reply)?;
 
     Ok(pcr::value(reply.get(..len).unwrap_or_default())?.to_vec())
-}
-
-/// Prints a digest the way it is usually quoted.
-struct Hex<'a>(&'a [u8]);
-
-impl fmt::Display for Hex<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.iter().try_for_each(|byte| write!(f, "{byte:02x}"))
-    }
 }
