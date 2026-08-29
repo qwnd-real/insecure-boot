@@ -31,6 +31,9 @@ use crate::{Error, Result, pecoff};
 /// Highest PCR a measurement made through this protocol may name.
 const MAX_PCR_INDEX: u32 = 23;
 
+/// One past the highest PCR the replay fills, so the highest one it owns.
+const REPLAYED_PCR_COUNT: u32 = ib_tcglog::PCR_COUNT;
+
 /// Revision of the protocol and of its capability structure that this implements.
 const VERSION: Tcg2Version = Tcg2Version { major: 1, minor: 1 };
 
@@ -370,7 +373,12 @@ unsafe extern "efiapi" fn hash_log_extend_event(
         return Status::INVALID_PARAMETER;
     }
 
-    if pcr_index == 4 {
+    // PCRs below `REPLAYED_PCR_COUNT` hold the values the replay left them
+    // with, which is what the operating system is meant to find there. A
+    // measurement into one of them is answered with success and otherwise
+    // dropped, so the replayed state survives whatever measures through this
+    // protocol during the boot.
+    if pcr_index < REPLAYED_PCR_COUNT {
         return Status::SUCCESS;
     }
 
