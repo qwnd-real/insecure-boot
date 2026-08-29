@@ -408,9 +408,12 @@ fn signed_data(digest: &[u8; 32], mok: &Mok) -> Result<Vec<u8>> {
     // rewritten to the context-specific one the SignerInfo carries them
     // under; the bytes signed and the bytes embedded are the same ones.
     //
-    // The messageDigest attribute carries the digest of the content — the
-    // SpcIndirectData the certificate table names — not the digest of the
-    // image, which is what that content carries.
+    // The messageDigest attribute commits to the SpcIndirectData's content
+    // with the SEQUENCE header stripped: the authenticode verifier peels
+    // that header off before handing the content to the signature check, so
+    // the digest has to be taken over the bare fields, not the DER of the
+    // whole structure.
+    let content = Any::from_der(&indirect)?.value().to_vec();
     let mut attributes = SetOfVec::new();
     attributes.insert(Attribute {
         attr_type: CONTENT_TYPE,
@@ -419,7 +422,7 @@ fn signed_data(digest: &[u8; 32], mok: &Mok) -> Result<Vec<u8>> {
     attributes.insert(Attribute {
         attr_type: MESSAGE_DIGEST,
         attr_values: one(Any::from_der(
-            &OctetString::new(Sha256::digest(&indirect).to_vec())?.to_der()?,
+            &OctetString::new(Sha256::digest(&content).to_vec())?.to_der()?,
         )?)?,
     })?;
 
