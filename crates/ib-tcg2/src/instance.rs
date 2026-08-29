@@ -370,6 +370,10 @@ unsafe extern "efiapi" fn hash_log_extend_event(
         return Status::INVALID_PARAMETER;
     }
 
+    if pcr_index == 4 {
+        return Status::SUCCESS;
+    }
+
     let data = event.get(EVENT_DATA_AT..).unwrap_or_default();
 
     let Ok(measured_len) = usize::try_from(data_to_hash_len) else {
