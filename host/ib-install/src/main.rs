@@ -58,10 +58,6 @@ fn run(arguments: &Arguments) -> Result<()> {
     preflight(arguments)?;
 
     let mok = mok::load_or_generate()?;
-    println!(
-        "ib-install: the password MokManager will ask for is \"{}\"",
-        mok::MOK_PASSWORD
-    );
 
     let signed = sign::sign(&read(LOADER)?, &mok)?;
     println!(
@@ -82,7 +78,7 @@ fn run(arguments: &Arguments) -> Result<()> {
 #[cfg(windows)]
 fn stage(arguments: &Arguments, mok: &Mok, signed: &[u8]) -> Result<()> {
     let request = mok::signature_list(mok.cert());
-    mok::enroll(&request)?;
+    mok::enroll(mok, &request)?;
 
     let esp = esp::mount()?;
     esp.deploy(&arguments.payload, signed)?;

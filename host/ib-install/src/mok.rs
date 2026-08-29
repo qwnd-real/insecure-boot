@@ -25,6 +25,7 @@ use x509_cert::{Certificate, SubjectPublicKeyInfo};
 use crate::error::{Error, Result};
 
 /// Password `MokManager` asks for before it enrolls the key.
+#[cfg(windows)]
 pub const MOK_PASSWORD: &str = "1234";
 
 /// Where the private key is kept, as PKCS#8 DER.
@@ -156,29 +157,63 @@ fn generate(key: &Path, cert: &Path) -> Result<Mok> {
     })
 }
 
+/// `EFI_CERT_X509_GUID`, naming what a signature list's entries hold.
+#[cfg(any(windows, test))]
+const X509_GUID: [u8; 16] = [
+    0xa1, 0x59, 0xc0, 0xa5, 0xe4, 0x94, 0xa7, 0x4a, 0x87, 0xb5, 0xab, 0x15, 0x5c, 0x2b, 0xf0, 0x72,
+];
+
+/// Length of the fixed part of an `EFI_SIGNATURE_LIST`.
+#[cfg(any(windows, test))]
+const LIST_HEADER: usize = 16 + 3 * size_of::<u32>();
+
+/// Length of an `EFI_SIGNATURE_DATA`'s owner GUID.
+#[cfg(any(windows, test))]
+const OWNER: usize = 16;
+
+/// Reports whether an `MokList` as shim keeps it already carries `cert`.
+///
+/// The list is a run of `EFI_SIGNATURE_LIST`s; the certificate is in it when
+/// an X.509 entry's data is the certificate, byte for byte.
+#[cfg(any(windows, test))]
+#[must_use]
+pub fn already_enrolled(list: &[u8], cert: &[u8]) -> bool {
+    let mut at = 0;
+    while let Some(header) = list.get(at..at + LIST_HEADER) {
+        let list_size = u32::from_le_bytes(header[16..20].try_into().expect("four bytes")) as usize;
+        let signature_size =
+            u32::from_le_bytes(header[24..28].try_into().expect("four bytes")) as usize;
+        if list_size < LIST_HEADER || at + list_size > list.len() {
+            return false;
+        }
+
+        if header[..16] == X509_GUID && signature_size > OWNER {
+            let mut entry = at + LIST_HEADER;
+            while entry + signature_size <= at + list_size {
+                if &list[entry + OWNER..entry + signature_size] == cert {
+                    return true;
+                }
+                entry += signature_size;
+            }
+        }
+
+        at += list_size;
+    }
+
+    false
+}
+
 /// Wraps `cert` the way an `MokNew` variable asks for it: an
 /// `EFI_SIGNATURE_LIST` holding one X.509 certificate.
 #[cfg(windows)]
 #[must_use]
 pub fn signature_list(cert: &[u8]) -> Vec<u8> {
-    /// `EFI_CERT_X509_GUID`, naming what a signature list's entries hold.
-    const X509_GUID: [u8; 16] = [
-        0xa1, 0x59, 0xc0, 0xa5, 0xe4, 0x94, 0xa7, 0x4a, 0x87, 0xb5, 0xab, 0x15, 0x5c, 0x2b, 0xf0,
-        0x72,
-    ];
-
     /// The shim lock GUID, as the owner of the key being enrolled: shim 16's,
     /// in the mixed-endian layout an `EFI_GUID` serializes to.
     const OWNER_GUID: [u8; 16] = [
         0x50, 0xab, 0x5d, 0x60, 0x46, 0xe0, 0x00, 0x43, 0xab, 0xb6, 0x3d, 0xd8, 0x10, 0xdd, 0x8b,
         0x23,
     ];
-
-    /// Length of the fixed part of an `EFI_SIGNATURE_LIST`.
-    const LIST_HEADER: usize = 16 + 3 * size_of::<u32>();
-
-    /// Length of an `EFI_SIGNATURE_DATA`'s owner GUID.
-    const OWNER: usize = 16;
 
     let signature = OWNER + cert.len();
     let list = LIST_HEADER + signature;
@@ -195,15 +230,17 @@ pub fn signature_list(cert: &[u8]) -> Vec<u8> {
     bytes
 }
 
-/// Writes the enrollment request, and the password `MokManager` will ask for.
+/// Writes the enrollment request, and the password `MokManager` will ask for,
+/// unless the key the working directory holds is already enrolled. Returns
+/// whether a request was written.
 ///
 /// # Errors
 ///
 /// Fails if the console lacks the privilege firmware variables need, or the
 /// firmware refuses either variable.
 #[cfg(windows)]
-pub fn enroll(request: &[u8]) -> Result<()> {
-    windows::enroll(request)
+pub fn enroll(mok: &Mok, request: &[u8]) -> Result<bool> {
+    windows::enroll(mok, request)
 }
 
 /// Writing the enrollment request, on Windows.
@@ -211,7 +248,7 @@ pub fn enroll(request: &[u8]) -> Result<()> {
 mod windows {
     use rsa::sha2::{Digest, Sha256};
     use windows_sys::Win32::Foundation::LUID;
-    use windows_sys::Win32::Foundation::{CloseHandle, GetLastError};
+    use windows_sys::Win32::Foundation::{CloseHandle, ERROR_INSUFFICIENT_BUFFER, GetLastError};
     use windows_sys::Win32::Security::{
         AdjustTokenPrivileges, LUID_AND_ATTRIBUTES, LookupPrivilegeValueW, SE_PRIVILEGE_ENABLED,
         TOKEN_ADJUST_PRIVILEGES, TOKEN_PRIVILEGES, TOKEN_QUERY,
@@ -221,6 +258,7 @@ mod windows {
         GetFirmwareEnvironmentVariableW, SetFirmwareEnvironmentVariableExW,
     };
 
+    use super::Mok;
     use crate::error::{Error, Result};
     use crate::mok::MOK_PASSWORD;
 
@@ -308,8 +346,22 @@ mod windows {
     }
 
     /// Writes `MokNew` and `MokAuth`, after making sure this console can.
-    pub fn enroll(request: &[u8]) -> Result<()> {
+    pub fn enroll(mok: &Mok, request: &[u8]) -> Result<bool> {
         privilege()?;
+
+        // A list that cannot be read is no reason to hold the request back:
+        // writing one for a key already enrolled only costs the user a
+        // confirmation, while skipping for the wrong reason would stop the
+        // boot from ever being staged.
+        if let Some(list) = mok_list()
+            && super::already_enrolled(&list, mok.cert())
+        {
+            println!("ib-install: the MOK in mok.der is already in this machine's MOK list");
+            println!("  no enrollment request: shim will run the loader without asking");
+            return Ok(false);
+        }
+
+        println!("ib-install: the password MokManager will ask for is \"{MOK_PASSWORD}\"");
 
         set("MokNew", SHIM_LOCK, request)?;
 
@@ -328,7 +380,7 @@ mod windows {
         set("MokAuth", SHIM_LOCK, &auth)?;
 
         warn_if_no_secure_boot();
-        Ok(())
+        Ok(true)
     }
 
     /// Warns when Secure Boot is off, because then shim runs the loader
@@ -352,6 +404,40 @@ mod windows {
                 "ib-install: Secure Boot is off, so `MokManager` will not ask anything and shim will run the loader as it is"
             );
         }
+    }
+
+    /// Reads the `MokList` shim mirrors for the operating system to read.
+    ///
+    /// The mirror is what the MOK list looked like at the last shim boot;
+    /// `MokList` itself carries no runtime-access attribute and cannot be
+    /// read from here.
+    fn mok_list() -> Option<Vec<u8>> {
+        for capacity in [4 * 1024, 16 * 1024, 64 * 1024] {
+            let mut buffer = vec![0_u8; capacity];
+
+            // SAFETY: `buffer` is writable for as many bytes as the call is
+            // told, and both string arguments are null-terminated strings the
+            // call only reads.
+            let read = unsafe {
+                GetFirmwareEnvironmentVariableW(
+                    crate::wide("MokListRT").as_ptr(),
+                    crate::wide(SHIM_LOCK).as_ptr(),
+                    buffer.as_mut_ptr().cast(),
+                    u32::try_from(buffer.len()).unwrap_or(u32::MAX),
+                )
+            };
+            if read != 0 {
+                buffer.truncate(usize::try_from(read).unwrap_or(0));
+                return Some(buffer);
+            }
+
+            // SAFETY: the call only reads the calling thread's last error.
+            if unsafe { GetLastError() } != ERROR_INSUFFICIENT_BUFFER {
+                return None;
+            }
+        }
+
+        None
     }
 
     /// Writes one firmware variable.
@@ -403,4 +489,50 @@ fn write(path: &Path, bytes: &[u8]) -> Result<()> {
         path: path.to_path_buf(),
         source,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{LIST_HEADER, OWNER, X509_GUID, already_enrolled};
+
+    /// Builds one X.509 signature list around `certs`.
+    fn list(certs: &[&[u8]]) -> Vec<u8> {
+        certs
+            .iter()
+            .map(|cert| {
+                let signature = u32::try_from(OWNER + cert.len()).expect("a test certificate");
+                let list = u32::try_from(LIST_HEADER).expect("a constant that fits") + signature;
+                let mut bytes = Vec::with_capacity(list as usize);
+                bytes.extend_from_slice(&X509_GUID);
+                bytes.extend_from_slice(&list.to_le_bytes());
+                bytes.extend_from_slice(&0_u32.to_le_bytes());
+                bytes.extend_from_slice(&signature.to_le_bytes());
+                bytes.extend_from_slice(&[0_u8; OWNER]);
+                bytes.extend_from_slice(cert);
+                bytes
+            })
+            .collect::<Vec<_>>()
+            .concat()
+    }
+
+    #[test]
+    fn finds_a_certificate_the_list_carries() {
+        let ours = b"a certificate of ours";
+        let theirs = b"a certificate of theirs";
+        assert!(already_enrolled(&list(&[theirs, ours]), ours));
+        assert!(already_enrolled(&list(&[ours]), ours));
+    }
+
+    #[test]
+    fn misses_a_certificate_the_list_does_not_carry() {
+        assert!(!already_enrolled(&list(&[b"another one"]), b"ours"));
+        assert!(!already_enrolled(&[], b"ours"));
+    }
+
+    #[test]
+    fn stops_at_a_malformed_list() {
+        let mut broken = list(&[b"ours"]);
+        broken.truncate(broken.len() - 1);
+        assert!(!already_enrolled(&broken, b"ours"));
+    }
 }
