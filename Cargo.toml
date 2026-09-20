@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "crates/ib-config",
     "crates/ib-loader",
     "crates/ib-tcg2",
     "crates/ib-tcglog",
@@ -29,6 +30,7 @@ x86_64 = { version = "0.15.5", default-features = false, features = ["instructio
 bitflags = { version = "2.13.1", default-features = false }
 thiserror = { version = "2.0.20", default-features = false }
 
+ib-config = { path = "crates/ib-config" }
 ib-tcg2 = { path = "crates/ib-tcg2" }
 ib-tcglog = { path = "crates/ib-tcglog" }
 ib-tpm-crb = { path = "crates/ib-tpm-crb" }
