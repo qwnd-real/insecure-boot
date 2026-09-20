@@ -97,6 +97,34 @@ pub enum Error {
         code: u32,
     },
 
+    /// The firmware keeps no `Setup` variable to probe.
+    #[cfg(windows)]
+    #[error(
+        "the firmware keeps no Setup variable; the offset this run asks for has nothing to point into"
+    )]
+    NoSetupVariable,
+
+    /// The `Setup` variable could not be read.
+    #[cfg(windows)]
+    #[error("reading the Setup firmware variable failed with {code:#010x}")]
+    SetupUnreadable {
+        /// Error code the firmware interface reported.
+        code: u32,
+    },
+
+    /// The firmware refused a write of `Setup` with zero bytes changed, the
+    /// signature of its runtime variable protection.
+    #[cfg(windows)]
+    #[error(
+        "the firmware refused writing Setup unchanged ({code:#010x}); UEFI Variable Runtime \
+         Protection (often called \"Password protection of Runtime Variables\") is enabled, \
+         disable it in the firmware setup and run this tool again"
+    )]
+    VariableProtection {
+        /// Error code the firmware interface reported.
+        code: u32,
+    },
+
     /// The console this runs in does not hold the privilege firmware
     /// variables need.
     #[cfg(windows)]
@@ -112,6 +140,11 @@ pub enum Error {
         /// Exit code it reported.
         code: Option<i32>,
     },
+
+    /// The console input could not be read while asking for the Setup
+    /// offset.
+    #[error("cannot read the console input: {0}")]
+    Input(#[source] io::Error),
 
     /// The ESP could not be mounted.
     #[cfg(windows)]

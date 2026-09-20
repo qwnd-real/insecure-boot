@@ -334,11 +334,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "ib-config"
+version = "0.1.0"
+dependencies = [
+ "thiserror",
+]
+
+[[package]]
 name = "ib-install"
 version = "0.1.0"
 dependencies = [
  "clap",
  "der",
+ "ib-config",
  "ib-tcglog",
  "rand",
  "rsa",

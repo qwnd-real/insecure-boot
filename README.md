@@ -80,18 +80,25 @@ regardless of who makes it.
  ────────────────                           ──────────────
  Windows boots normally                     ib-install.exe  (elevated, once)
  ib-tcg-dump.exe                            ├─ signs ib-loader.efi with the MOK
- └─▶ tcglog.ib ───────────────────────────▶ ├─ stages dump, payload, and shim chain
+ └─▶ tcglog.ib ───────────────────────────▶ ├─ stages dump, payload, config, and shim chain
      (the genuine boot's                    ├─ backs up bootmgfw.efi
       event log)                            └─ writes the MOK enrollment request
 
-                                            boot:
+                                            boot 1:
                                               firmware ─▶ shim  (db-signed)
                                                            └─▶ MokManager  (asks once)
                                                                  └─▶ ib-loader.efi  (MOK-signed)
+                                                                       └─ Setup[offset] at TCG 2.0?
+                                                                          flip to TCG 1.2 and reset
+
+                                            boot 2:
+                                              firmware ─▶ shim ─▶ ib-loader.efi
                                                                        ├─ restore bootmgfw.efi
                                                                        ├─ wipe every staged file
                                                                        ├─ replay tcglog.ib into PCR0–PCR7
                                                                        ├─ install EFI_TCG2_PROTOCOL
+                                                                       ├─ wipe Mok/SBAT residue,
+                                                                       │  Setup[offset] back to TCG 2.0
                                                                        ├─ run the unsigned payload
                                                                        └─ chain-load bootmgfw.efi
                                                                              └─▶ Windows
@@ -104,15 +111,9 @@ Step by step:
    `tcglog.ib`.
 2. **Reconfigure.** In UEFI setup: TPM UEFI spec version → **TCG 1.2**, SHA-1
    bank optionally disabled, Secure Boot left **on**.
-3. **Stage.** `ib-install.exe` signs `ib-loader.efi` with a locally generated
-   MOK key, stages the shim over `bootmgfw.efi`, the signed loader as
-   `grubx64.efi`, MokManager as `mmx64.efi`, and the dump and payload in the
-   ESP root — restoring the original boot manager and rolling everything back
-   if any step fails.
-4. **Consent.** On the next boot, MokManager asks the user, physically
-   present, whether to enroll the key. Nothing runs without that yes.
-5. **Detour.** The loader restores the real `bootmgfw.efi` and securely wipes
-   every staged artifact, brings up ACPI through
+3. **Stage.** `ib-install.exe` first probes the firmware's variable protection by writing `Setup` back unchanged — UEFI Variable Runtime Protection would refuse that, and with it every write the boot needs, so the staging stops there and names the setting to disable. It then signs `ib-loader.efi` with a locally generated MOK key, asks for the byte offset of the TPM UEFI spec version inside `Setup` (0x1B by default, where AMI keeps it), stages the shim over `bootmgfw.efi`, the signed loader as `grubx64.efi`, MokManager as `mmx64.efi`, and the dump, payload, and that offset as an `ib-config.bin` config file in the ESP root — restoring the original boot manager and rolling everything back if any step fails.
+4. **Consent.** On the next boot, MokManager asks the user, physically present, whether to enroll the key. Nothing runs without that yes.
+5. **Detour.** The loader reads the config and checks `Setup` at its offset: while it says TCG 2.0 the firmware has been measuring this very boot, so the loader flips it to TCG 1.2 and resets with everything still staged, and the boot starts over. On the boot that gets past that check, it restores the real `bootmgfw.efi` and securely wipes every staged artifact, brings up ACPI through
    [uACPI](https://github.com/uACPI/uACPI), drives the TPM 2.0 directly over
    its CRB interface, and replays the dump's events into the zeroed SHA-256
    banks in log order — the only order that reproduces the recorded values.
@@ -121,9 +122,7 @@ Step by step:
    replayed log and whose final-events table is what the OS reads after boot
    services end. Measurements into PCR0–PCR7 through it succeed and are
    dropped, keeping the replayed state intact.
-7. **Payload.** The unsigned EFI application is mapped into memory by hand
-   and called — `LoadImage` would refuse it — and afterwards the restored
-   Windows boot manager is chain-loaded from its own device path.
+7. **Payload.** It deletes every shim/MOK/SBAT/SSP variable the enrollment left behind and puts the spec version back to TCG 2.0 for the boots after this one, then maps the unsigned EFI application into memory by hand and calls it — `LoadImage` would refuse it — and afterwards the restored Windows boot manager is chain-loaded from its own device path.
 
 ## What the attester sees
 
@@ -145,6 +144,7 @@ deception is not a forged log; it is an empty TPM filled from a real one.
 | Path | What it is |
 | --- | --- |
 | `crates/ib-loader` | The UEFI application: restore, wipe, replay, install, payload, chain-load |
+| `crates/ib-config` | The `ib-config.bin` format: the `Setup` offset of the TPM UEFI spec version |
 | `crates/ib-tcg2` | The `EFI_TCG2_PROTOCOL` implementation and its displacement of firmware's |
 | `crates/ib-tcglog` | The `tcglog.ib` replay-dump format |
 | `crates/ib-tpm-crb` | TPM 2.0 Command Response Buffer driver |

@@ -1,16 +1,25 @@
 //! UEFI application entry point for insecure-boot.
 //!
 //! Runs once, out of the shim the host tool has put in the Windows boot
-//! manager's place: restores the original `bootmgfw.efi`, consumes the payload
-//! and the `tcglog.ib` replay dump staged in the boot volume, brings ACPI up
-//! through uACPI, replays the dump into PCR0 through PCR7 over the platform's
-//! TPM 2.0 Command Response Buffer interface if there is one, and publishes an
-//! `EFI_TCG2_PROTOCOL` over the event log that dump describes. The payload is
-//! mapped and run by hand — it is unsigned, so `LoadImage` would refuse it —
-//! and the restored boot manager is then started from its own path. The image
-//! runs before boot services are exited, so the console, the delay services,
-//! the file systems and the identity-mapped address space every layer below
-//! relies on are all still available.
+//! manager's place. It first reads the staged configuration naming the byte
+//! offset, inside the firmware's `Setup` variable, of the TPM UEFI spec
+//! version setting: if that byte still says TCG 2.0, the firmware has been
+//! measuring this very boot into the SHA-256 banks, so the loader flips it
+//! to TCG 1.2 and resets with every staged artifact left in place, and the
+//! boot starts over. On the boot that gets past that check, it restores the
+//! original `bootmgfw.efi`, consumes the payload and the `tcglog.ib` replay
+//! dump staged in the boot volume, brings ACPI up through uACPI, replays the
+//! dump into PCR0 through PCR7 over the platform's TPM 2.0 Command Response
+//! Buffer interface if there is one, and publishes an `EFI_TCG2_PROTOCOL`
+//! over the event log that dump describes. It then deletes the variables the
+//! MOK enrollment and the shim left behind and puts the spec version back to
+//! TCG 2.0, so the machine is genuinely configured again by the time the
+//! next boot measures it. The payload is mapped and run by hand — it is
+//! unsigned, so `LoadImage` would refuse it — and the restored boot manager
+//! is then started from its own path. The image runs before boot services
+//! are exited, so the console, the delay services, the file systems and the
+//! identity-mapped address space every layer below relies on are all still
+//! available.
 
 #![no_main]
 #![no_std]
@@ -20,6 +29,7 @@ extern crate alloc;
 mod bootmgfw;
 mod error;
 mod fs;
+mod nvram;
 mod payload;
 mod replay;
 mod sbat;
@@ -27,6 +37,7 @@ mod tcg2;
 
 use core::time::Duration;
 
+use ib_config::Config;
 use ib_tcglog::Dump;
 use ib_tpm_crb::Tpm;
 use ib_tpm2::capability;
@@ -65,14 +76,25 @@ fn main() -> Status {
     }
 }
 
-/// Restores the boot manager, consumes the staged artifacts and the shim
-/// chain that reached them, publishes the TCG2 protocol if the platform has a
-/// TPM, runs the payload, and starts the boot manager.
+/// Reads the staged configuration and puts the platform at TCG 1.2, letting
+/// a boot that has to start over do so, then restores the boot manager,
+/// consumes the staged artifacts and the shim chain that reached them,
+/// publishes the TCG2 protocol if the platform has a TPM, clears the
+/// variables the enrollment left behind, runs the payload, and starts the
+/// boot manager.
 ///
 /// The TCG2 protocol the payload sees is withdrawn only if control comes back:
 /// the boot manager starting Windows takes it away with the image instead.
 fn run() -> Result<()> {
     let mut volume = fs::open()?;
+
+    // The configuration names the Setup byte everything below depends on, so
+    // it is read before any other artifact and wiped with the last of them:
+    // a boot that goes out to flip the spec version and reset comes back and
+    // needs it again.
+    let config = Config::parse(&volume.read(ib_config::FILE_NAME)?)?;
+
+    nvram::ensure_tcg_1_2(config.tcg_spec_offset())?;
 
     bootmgfw::restore(&mut volume)?;
 
@@ -92,6 +114,7 @@ fn run() -> Result<()> {
     volume.wipe(bootmgfw::BACKUP)?;
     volume.wipe(bootmgfw::MOK_MANAGER)?;
     volume.wipe(bootmgfw::RENAMED_LOADER)?;
+    volume.wipe(ib_config::FILE_NAME)?;
 
     let dump = dump_bytes.as_deref().map(Dump::parse).transpose()?;
 
@@ -107,6 +130,10 @@ fn run() -> Result<()> {
     } else {
         println!("insecure-boot: no TPM 2.0 command-response-buffer interface");
     }
+
+    // The enrollment and the shim leave variables behind, and the boots
+    // after this one want the spec version they found here.
+    nvram::clear_residue(config.tcg_spec_offset());
 
     let outcome = tail(&payload);
 

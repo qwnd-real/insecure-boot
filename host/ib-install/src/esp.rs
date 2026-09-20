@@ -67,19 +67,21 @@ impl Esp {
         self.letter
     }
 
-    /// Stages the one-shot boot: the dump and the payload in the root, the
-    /// boot manager backed up, and the shim chain in its place.
+    /// Stages the one-shot boot: the dump, the payload, and the loader's
+    /// configuration in the root, the boot manager backed up, and the shim
+    /// chain in its place.
     ///
     /// # Errors
     ///
     /// Fails if any copy fails; after the backup, the boot manager is put
     /// back before the failure is reported.
-    pub fn deploy(&self, payload: &Path, signed: &[u8]) -> Result<()> {
+    pub fn deploy(&self, payload: &Path, signed: &[u8], config: ib_config::Config) -> Result<()> {
         copy(
             Path::new(ib_tcglog::FILE_NAME),
             &self.root(ib_tcglog::FILE_NAME),
         )?;
         copy(payload, &self.root("ib-load.efi"))?;
+        write(&self.root(ib_config::FILE_NAME), &config.to_bytes())?;
 
         let backup = self.backup()?;
 

@@ -12,9 +12,12 @@
 mod error;
 #[cfg(windows)]
 mod esp;
+#[cfg(windows)]
+mod firmware;
 mod mok;
 mod sign;
 
+use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -31,6 +34,10 @@ const SHIM: &str = "shimx64.efi";
 
 /// The `MokManager` the shim runs to ask about the key.
 const MOK_MANAGER: &str = "mmx64.efi";
+
+/// The offset within `Setup` where AMI firmware keeps the TPM UEFI spec
+/// version, which an empty answer at the prompt takes.
+const DEFAULT_TCG_SPEC_OFFSET: u16 = 0x1b;
 
 /// Command line this tool accepts.
 #[derive(Debug, Parser)]
@@ -68,29 +75,86 @@ fn run(arguments: &Arguments) -> Result<()> {
     stage(arguments, &mok, &signed)
 }
 
-/// Writes the enrollment request and stages the ESP — the part only Windows
-/// can do.
+/// Probes the firmware's variable protection, asks where the TPM UEFI spec
+/// version sits in `Setup`, writes the enrollment request, and stages the
+/// ESP: the part only Windows can do.
 ///
 /// # Errors
 ///
-/// Fails if the firmware refuses the enrollment request, or the ESP refuses
+/// Fails if the firmware refuses variable writes, the enrollment request, or
 /// any part of the staging.
 #[cfg(windows)]
 fn stage(arguments: &Arguments, mok: &Mok, signed: &[u8]) -> Result<()> {
+    firmware::probe()?;
+
+    let config = ib_config::Config::new(ask_setup_offset()?);
+
     let request = mok::signature_list(mok.cert());
     mok::enroll(mok, &request)?;
 
     let esp = esp::mount()?;
-    esp.deploy(&arguments.payload, signed)?;
+    esp.deploy(&arguments.payload, signed, config)?;
 
     println!(
         "ib-install: staged; the ESP stays mounted at {}:\\",
         esp.letter()
     );
     println!("  next boot: MokManager asks for the password and whether to enroll the key");
-    println!("  the boot after: the loader runs once, restores Windows, and boots it");
+    println!(
+        "  the boot after: the loader flips TCG UEFI spec version to TCG 1.2 and resets, if it was TCG 2.0"
+    );
+    println!("  the boot after that: the loader runs once, restores Windows, and boots it");
 
     Ok(())
+}
+
+/// Asks for the byte offset, within `Setup`, of the TPM UEFI spec version
+/// setting. AMI firmware keeps it at [`DEFAULT_TCG_SPEC_OFFSET`], which is
+/// what an empty answer takes.
+///
+/// # Errors
+///
+/// Fails if the console input cannot be read.
+#[cfg(windows)]
+fn ask_setup_offset() -> Result<u16> {
+    println!("ib-install: the loader flips the TPM UEFI spec version through the Setup variable");
+    println!("  byte offset of \"TPM UEFI Spec Version\" within Setup");
+
+    loop {
+        print!("  offset [default 0x{DEFAULT_TCG_SPEC_OFFSET:X}]: ");
+        io::stdout().flush().map_err(Error::Input)?;
+
+        let mut line = String::new();
+        io::stdin().read_line(&mut line).map_err(Error::Input)?;
+
+        let answer = line.trim();
+        if answer.is_empty() {
+            return Ok(DEFAULT_TCG_SPEC_OFFSET);
+        }
+
+        if let Some(offset) = parse_offset(answer) {
+            return Ok(offset);
+        }
+        println!("  not an offset I can read; hexadecimal like 1b or 0x1b, or decimal like 27");
+    }
+}
+
+/// Parses an offset answer: `0x1b` as hexadecimal, otherwise decimal with a
+/// hexadecimal fallback, because `1b` reads as hexadecimal to anyone typing
+/// an offset.
+#[cfg(windows)]
+fn parse_offset(answer: &str) -> Option<u16> {
+    if let Some(hex) = answer
+        .strip_prefix("0x")
+        .or_else(|| answer.strip_prefix("0X"))
+    {
+        return u16::from_str_radix(hex, 16).ok();
+    }
+
+    answer
+        .parse::<u16>()
+        .ok()
+        .or_else(|| u16::from_str_radix(answer, 16).ok())
 }
 
 /// The same, where there is no firmware to talk to.

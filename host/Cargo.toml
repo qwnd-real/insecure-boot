@@ -9,6 +9,7 @@ license = "MIT OR Apache-2.0"
 publish = false
 
 [workspace.dependencies]
+ib-config = { path = "../crates/ib-config" }
 ib-tcglog = { path = "../crates/ib-tcglog" }
 
 clap = { version = "4.5.51", features = ["derive"] }

@@ -318,9 +318,8 @@ fn relocate(image: &Image, base: NonNull<u8>) -> Result<()> {
             let entries = at + RELOCATION_HEADER_LEN..at + block;
             let encoded = bytes(&directory, entries.start, entries.len())?;
 
-            for word in encoded.chunks_exact(size_of::<u16>()) {
-                let word =
-                    u16::from_le_bytes(word.try_into().map_err(|_| Error::MalformedPayload)?);
+            for word in encoded.as_chunks::<{ size_of::<u16>() }>().0 {
+                let word = u16::from_le_bytes(*word);
                 let kind = word >> 12;
 
                 match kind {

@@ -247,13 +247,7 @@ pub fn enroll(mok: &Mok, request: &[u8]) -> Result<bool> {
 #[cfg(windows)]
 mod windows {
     use rsa::sha2::{Digest, Sha256};
-    use windows_sys::Win32::Foundation::LUID;
-    use windows_sys::Win32::Foundation::{CloseHandle, ERROR_INSUFFICIENT_BUFFER, GetLastError};
-    use windows_sys::Win32::Security::{
-        AdjustTokenPrivileges, LUID_AND_ATTRIBUTES, LookupPrivilegeValueW, SE_PRIVILEGE_ENABLED,
-        TOKEN_ADJUST_PRIVILEGES, TOKEN_PRIVILEGES, TOKEN_QUERY,
-    };
-    use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+    use windows_sys::Win32::Foundation::{ERROR_INSUFFICIENT_BUFFER, GetLastError};
     use windows_sys::Win32::System::WindowsProgramming::{
         GetFirmwareEnvironmentVariableW, SetFirmwareEnvironmentVariableExW,
     };
@@ -275,79 +269,9 @@ mod windows {
     /// Attributes the Mok variables are written with: the ones mokutil uses.
     const VARIABLE_ATTRIBUTES: u32 = 0x1 | 0x2 | 0x4;
 
-    /// Enables the privilege writing firmware variables needs, which only an
-    /// administrator console can hold.
-    fn privilege() -> Result<()> {
-        let mut token = std::ptr::null_mut();
-        // SAFETY: `token` is a live, uninitialized handle slot the call fills,
-        // and the process handle is the one the operating system guarantees.
-        if unsafe {
-            OpenProcessToken(
-                GetCurrentProcess(),
-                TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY,
-                &raw mut token,
-            )
-        } == 0
-        {
-            return Err(Error::NotElevated);
-        }
-
-        let mut luid = LUID {
-            LowPart: 0,
-            HighPart: 0,
-        };
-        // SAFETY: the privilege name is a null-terminated string the call only
-        // reads, and `luid` is a live slot the call fills.
-        if unsafe {
-            LookupPrivilegeValueW(
-                std::ptr::null(),
-                crate::wide("SeSystemEnvironmentPrivilege").as_ptr(),
-                &raw mut luid,
-            )
-        } == 0
-        {
-            // SAFETY: as in the `# Safety` section above.
-            unsafe { close(token) };
-            return Err(Error::NotElevated);
-        }
-
-        let privileges = TOKEN_PRIVILEGES {
-            PrivilegeCount: 1,
-            Privileges: [LUID_AND_ATTRIBUTES {
-                Luid: luid,
-                Attributes: SE_PRIVILEGE_ENABLED,
-            }],
-        };
-
-        // SAFETY: `privileges` describes its own length, and the token handle
-        // came from the `OpenProcessToken` call above.
-        let granted = unsafe {
-            AdjustTokenPrivileges(
-                token,
-                0,
-                &raw const privileges,
-                0,
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-            )
-        };
-        // SAFETY: the call only reads the calling thread's last error.
-        let assigned = unsafe { GetLastError() };
-        // SAFETY: as in the `# Safety` section above.
-        unsafe { close(token) };
-
-        // The call reports success even when the privilege could not be
-        // assigned; the error left behind says which happened.
-        if granted == 0 || assigned != 0 {
-            return Err(Error::NotElevated);
-        }
-
-        Ok(())
-    }
-
     /// Writes `MokNew` and `MokAuth`, after making sure this console can.
     pub fn enroll(mok: &Mok, request: &[u8]) -> Result<bool> {
-        privilege()?;
+        crate::firmware::privilege()?;
 
         // A list that cannot be read is no reason to hold the request back:
         // writing one for a key already enrolled only costs the user a
@@ -461,17 +385,6 @@ mod windows {
             return Err(Error::FirmwareVariable { name, code });
         }
         Ok(())
-    }
-
-    /// Closes a token handle.
-    ///
-    /// # Safety
-    ///
-    /// The handle must come from `OpenProcessToken` and must not be closed
-    /// twice.
-    unsafe fn close(token: *mut core::ffi::c_void) {
-        // SAFETY: as in the `# Safety` section above.
-        unsafe { CloseHandle(token) };
     }
 }
 

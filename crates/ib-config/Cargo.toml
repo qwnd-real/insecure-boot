@@ -1,0 +1,13 @@
+[package]
+name = "ib-config"
+description = "The ib-config.bin staged configuration: the Setup offset of the TPM UEFI spec version."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+
+[lints]
+workspace = true

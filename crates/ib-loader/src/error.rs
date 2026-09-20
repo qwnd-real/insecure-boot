@@ -2,6 +2,8 @@
 
 use thiserror::Error;
 
+use uefi::Status;
+
 /// Result of one step of the boot.
 pub type Result<T> = core::result::Result<T, Error>;
 
@@ -24,6 +26,10 @@ pub enum Error {
     #[error("{0}")]
     Tcg2(#[from] ib_tcg2::Error),
 
+    /// The staged configuration file cannot be read.
+    #[error("the staged configuration is unusable: {0}")]
+    Config(#[from] ib_config::Error),
+
     /// A command did not fit the buffer reserved for it.
     #[error("a {0} command does not fit the buffer reserved for it")]
     CommandTooLong(&'static str),
@@ -31,6 +37,34 @@ pub enum Error {
     /// A file the run depends on is not in the boot volume.
     #[error("the boot volume holds no {0}")]
     MissingArtifact(&'static str),
+
+    /// The firmware keeps no `Setup` variable to reconfigure.
+    #[error("the firmware keeps no Setup variable to reconfigure")]
+    NoSetupVariable,
+
+    /// The `Setup` variable is too small for the offset the configuration
+    /// names.
+    #[error("the Setup variable is {len} bytes, too small for offset {offset:#x}")]
+    SetupTooSmall {
+        /// Length of the `Setup` variable.
+        len: usize,
+        /// Offset the configuration names.
+        offset: usize,
+    },
+
+    /// The `Setup` variable holds a value that is neither TCG 1.2 nor
+    /// TCG 2.0 at the configured offset.
+    #[error("Setup holds {0:#04x} at the configured offset, neither TCG 1.2 nor TCG 2.0")]
+    UnexpectedTcgSpec(u8),
+
+    /// The `Setup` variable refused the write, which firmware variable
+    /// protection also does.
+    #[error(
+        "Setup refused the write ({0:?}); if UEFI Variable Runtime Protection (often called \
+         \"Password protection of Runtime Variables\") is enabled, disable it in the firmware \
+         setup and power-cycle"
+    )]
+    ProtectedVariables(Status),
 
     /// A path held characters the firmware's file protocol cannot spell.
     #[error("{0} cannot be spelled for the firmware's file protocol")]
